@@ -1,0 +1,10 @@
+2025-08-20 15:32:54,930 - INFO - Database connection established.
+2025-08-20 15:32:55,644 - INFO - Extracted 30 rows from loan_cases
+2025-08-20 15:32:55,651 - INFO - Data transformation completed.
+2025-08-20 15:32:55,703 - ERROR - Error loading aggregated data: 1146 (42S02): Table 'working_file.manager_achievement' doesn't exist
+2025-08-20 15:32:55,706 - INFO - Database connection closed.
+2025-08-20 15:35:18,038 - INFO - Database connection established.
+2025-08-20 15:35:18,203 - INFO - Extracted 30 rows from loan_cases
+2025-08-20 15:35:18,208 - INFO - Data transformation completed.
+2025-08-20 15:35:18,221 - ERROR - Error loading aggregated data: 1146 (42S02): Table 'working_file.manager_achievement' doesn't exist
+2025-08-20 15:35:18,223 - INFO - Database connection closed.
