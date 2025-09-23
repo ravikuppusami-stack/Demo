@@ -7,14 +7,16 @@ import os
 import smtplib
 from email.message import EmailMessage
 
-# Load environment variables
+# Load environment variables (for mail IDs and passwords as well)
 load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-SENDER_EMAIL = os.getenv("SENDER_EMAIL")
-SENDER_PASSWORD = os.getenv("SENDER_PASSWORD")
-RECIPIENT_EMAIL = os.getenv("RECIPIENT_EMAIL")
+
+# Define these in your .env or secure environment
+SENDER_EMAIL = os.getenv("SENDER_EMAIL")        # backend email
+SENDER_PASSWORD = os.getenv("SENDER_PASSWORD")  # backend app password
+RECIPIENT_EMAIL = os.getenv("RECIPIENT_EMAIL")  # backend recipient
 
 if not DATABASE_URL or not GEMINI_API_KEY or not SENDER_EMAIL or not SENDER_PASSWORD or not RECIPIENT_EMAIL:
     st.error("One or more environment variables missing. Please check .env for email/DATABASE variables.")
@@ -51,7 +53,7 @@ You are an expert SQL assistant for a MySQL database with this schema:
 User request: "{prompt}"
 
 Write a valid MySQL SQL query ONLY that fulfills the user's request,
-ensuring all relevant columns are selected with correct aliases and casing.
+ensuring that all table and column names are enclosed in backticks (`) to respect case sensitivity.
 """
     response = client.models.generate_content(
         model="gemini-1.5-flash",
@@ -66,6 +68,15 @@ def query_db(sql_query: str):
         return df
     except Exception as e:
         return f"SQL Execution Error: {e}"
+
+def convert_to_crores(amount):
+    crores = 10000000
+    try:
+        if pd.isna(amount):
+            return None
+        return round(float(amount) / crores, 2)
+    except Exception:
+        return None
 
 def send_email_with_df_html(dataframe):
     html_content = dataframe.to_html(index=False)
@@ -97,17 +108,74 @@ if user_input and st.button("Send Query Result to Mail"):
         generated_sql = generate_sql_from_prompt(user_input, schema_info)
         result = query_db(generated_sql)
         if isinstance(result, pd.DataFrame):
-            result.columns = [col.lower() for col in result.columns]
+            # Remove any existing grand total rows
+            if 'spoc_name' in result.columns:
+                result = result[result['spoc_name'] != 'Grand Total']
 
-            if 'classification' not in result.columns or 'nb' not in result.columns:
-                st.error("Required columns 'classification' or 'nb' not found.")
-            else:
-                grouped = result.groupby('classification', as_index=False)['nb'].sum()
-                grand_total = pd.DataFrame({'classification': ['Grand Total'], 'nb': [grouped['nb'].sum()]})
-                final_df = pd.concat([grouped, grand_total], ignore_index=True)
+            # Detect loan amount columns and convert to crores
+            loan_amount_cols = [col for col in ['loanamount', 'loan_amount', 'total_loan_amount', 'TotalLoanAmount_Cr'] if col in result.columns]
+            if loan_amount_cols:
+                loan_col = loan_amount_cols[0]
+                result['loanamount'] = result[loan_col].apply(convert_to_crores)
+                if loan_col != 'loanamount':
+                    result = result.drop(columns=[loan_col])
+
+            # Warn if columns missing
+            for col in ['Target', 'loanamount']:
+                if col not in result.columns:
+                    st.warning(f"Note: '{col}' column not present in query result.")
+
+            # Group by spoc_name without summing 'Target' and sum loanamount
+            if 'spoc_name' in result.columns:
+                grouped_loan = result.groupby('spoc_name', as_index=False)['loanamount'].sum() if 'loanamount' in result.columns else pd.DataFrame(columns=['spoc_name', 'loanamount'])
+                grouped_target = result.groupby('spoc_name', as_index=False)['Target'].first() if 'Target' in result.columns else pd.DataFrame(columns=['spoc_name', 'Target'])
+
+                if not grouped_loan.empty and not grouped_target.empty:
+                    grouped = pd.merge(grouped_target, grouped_loan, on='spoc_name', how='outer')
+                elif not grouped_loan.empty:
+                    grouped = grouped_loan
+                else:
+                    grouped = grouped_target
+
+                # Append grand total row
+                grand_total = {'spoc_name': 'Grand Total'}
+                if 'Target' in grouped.columns:
+                    grand_total['Target'] = grouped['Target'].sum()
+                if 'loanamount' in grouped.columns:
+                    grand_total['loanamount'] = grouped['loanamount'].sum()
+
+                grouped = pd.concat([grouped, pd.DataFrame([grand_total])], ignore_index=True)
+                result = grouped
+            
+                if isinstance(result, pd.DataFrame):
+            # Convert loan_amount to crores if needed
+            if 'loan_amount' in result.columns:
+                result['loan_amount'] = result['loan_amount'].apply(convert_to_crores)
+
+            needed_cols = {'classification', 'nb', 'loan_amount'}
+            if needed_cols.issubset(result.columns):
+                # Pivot table: classification rows, nb columns, loan_amount summed, fill NaN 0
+                pivot_df = result.pivot_table(
+                    index='classification',
+                    columns='nb',
+                    values='loan_amount',
+                    aggfunc='sum',
+                    fill_value=0
+                )
+
+                pivot_df['Total'] = pivot_df.sum(axis=1)
+                grand_totals = pivot_df.sum(axis=0)
+                grand_totals.name = 'Grand total'
+                pivot_df = pivot_df.append(grand_totals)
+                final_df = pivot_df.reset_index()
 
                 st.dataframe(final_df)
                 send_email_with_df_html(final_df)
-                st.success("Query result with grouped nb by classification sent via email.")
+                st.success("Pivoted loan amount in crores with grand total sent via email.")
+            else:
+                st.warning(f"Query result missing required columns: {needed_cols}")
+                st.dataframe(result)
+                send_email_with_df_html(result)
+                st.success("Query result sent via email.")
         else:
             st.error(result)
