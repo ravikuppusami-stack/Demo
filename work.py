@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 from sqlalchemy import create_engine, text
-from google.genai import genai
+from google import genai
 from dotenv import load_dotenv
 import os
 import smtplib
