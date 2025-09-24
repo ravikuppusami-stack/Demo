@@ -81,7 +81,7 @@ def convert_to_crores(amount):
 def send_email_with_df_html(dataframe):
     html_content = dataframe.to_html(index=False)
     msg = EmailMessage()
-    msg['Subject'] = "Query Results"
+    msg['Subject'] = "SPOC wise Report"
     msg['From'] = SENDER_EMAIL
     msg['To'] = RECIPIENT_EMAIL
     msg.add_alternative(f"""
@@ -98,7 +98,7 @@ def send_email_with_df_html(dataframe):
         smtp.login(SENDER_EMAIL, SENDER_PASSWORD)
         smtp.send_message(msg)
 
-st.title("Data Analysis")
+st.title("SPOC Disbursement Report")
 
 user_input = st.text_input("Enter your question for the database:")
 
