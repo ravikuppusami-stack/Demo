@@ -1,3 +1,7 @@
-work.py
+work file
 
-I have done project in this file automate Resuts to send Email
+SPOC Wise Disbursement automate Resuts to send Email
+
+sample file
+
+classification results to send Email
