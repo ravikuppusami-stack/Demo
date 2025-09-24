@@ -7,139 +7,140 @@ import os
 import smtplib
 from email.message import EmailMessage
 
-# Load environment variables (for mail IDs and passwords as well)
+# Load environment variables
 load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+SENDER_EMAIL = os.getenv("SENDER_EMAIL")
+SENDER_PASSWORD = os.getenv("SENDER_PASSWORD")
+RECIPIENT_EMAIL = os.getenv("RECIPIENT_EMAIL")
 
-# Define these in your .env or secure environment
-SENDER_EMAIL = os.getenv("SENDER_EMAIL")        # backend email
-SENDER_PASSWORD = os.getenv("SENDER_PASSWORD")  # backend app password
-RECIPIENT_EMAIL = os.getenv("RECIPIENT_EMAIL")  # backend recipient
-
-if not DATABASE_URL or not GEMINI_API_KEY or not SENDER_EMAIL or not SENDER_PASSWORD or not RECIPIENT_EMAIL:
-    st.error("One or more environment variables missing. Please check .env for email/DATABASE variables.")
+if not all([DATABASE_URL, GEMINI_API_KEY, SENDER_EMAIL, SENDER_PASSWORD, RECIPIENT_EMAIL]):
+    st.error("Missing environment variables.")
     st.stop()
 
 engine = create_engine(DATABASE_URL)
 client = genai.Client(api_key=GEMINI_API_KEY)
 
+
 def get_full_schema_info():
-    schema = """
-Tables:
+    return """Tables:
 - `borrowers`(`borrower_id` int, `name` varchar(100), `contact` varchar(20), `address` text)
 - `institute`(`institute_id` int, `brand_name` text, `spoc_name` text, `region` text, `created_at` datetime)
-- `loan`(`case_id` int, `borrower_id` int, `institute_id` int, `manager_id` int, `classification` text, `loan_amount` double, `login_date` varchar(50), `approval_date` varchar(50), `UTR_timestamp` varchar(50), `nb` int)
+- `loan`(`case_id` int, `borrower_id` int, `institute_id` int, `manager_id` int, `classification` text, `loan_amount` double, `login_date` varchar(50), `approval_date` varchar(50), `UTR_timestamp` varchar(50), `nb` varchar(10))
 - `managers`(`manager_id` int, `name` varchar(100), `target` int, `achievement` int, `created_at` datetime)
 - `target`(`spoc_name` text, `Target` double)
 """
-    return schema
 
-def clean_sql_query(sql_query: str) -> str:
-    sql = sql_query.strip()
+
+def clean_sql_query(sql):
+    sql = sql.strip()
     if sql.startswith("```"):
         parts = sql.split("```")
-        sql = parts[1] if len(parts) > 1 else parts[0]
+        if len(parts) > 1:
+            sql = parts[1]
     if sql.lower().startswith("sql"):
         sql = sql[3:].lstrip(" \n")
     return sql
 
-def generate_sql_from_prompt(prompt: str, schema: str) -> str:
+
+def generate_sql_from_prompt(prompt, schema):
     full_prompt = f"""
 You are an expert SQL assistant for a MySQL database with this schema:
 {schema}
 
 User request: "{prompt}"
 
-Please generate valid MySQL SQL query to meet the following:
-
-- Write a valid MySQL SQL query ONLY that fulfills the user's request.
-- Use backticks (`) to enclose all table and column names to respect case sensitivity.
-
-Ensure all table and column names use backticks (`) consistently.
-
-Do not include any SQL outside of the SELECT statement.
+Write a valid MySQL SQL query ONLY that fulfills the user's request,
+ensuring all table and column names are enclosed in backticks (`).
 """
     response = client.models.generate_content(model="gemini-1.5-flash", contents=full_prompt)
     return response.text.strip()
 
-def query_db(sql_query: str):
-    sql = clean_sql_query(sql_query)
+
+def query_db(sql):
+    sql = clean_sql_query(sql)
     try:
-        df = pd.read_sql(text(sql), engine)
-        return df
+        return pd.read_sql(text(sql), engine)
     except Exception as e:
         return f"SQL Execution Error: {e}"
 
+
 def convert_to_crores(amount):
-    crores = 10000000
+    CRORES = 10000000
     try:
         if pd.isna(amount):
             return None
-        return round(float(amount) / crores, 2)
-    except Exception:
+        return round(float(amount) / CRORES, 2)
+    except:
         return None
 
-def send_email_with_df_html(dataframe):
-    html_content = dataframe.to_html(index=False)
+
+def send_email_with_pivot_and_totals(df):
+    required_cols = {'classification', 'nb', 'loan_amount'}
+    if required_cols.issubset(df.columns):
+        pivot_df = pd.pivot_table(
+            df,
+            index='classification',
+            columns='nb',
+            values='loan_amount',
+            aggfunc='sum',
+            fill_value=0
+        )
+        for col in ['ED', 'AB', 'AV', 'KSF']:
+            if col not in pivot_df.columns:
+                pivot_df[col] = 0.0
+        pivot_df = pivot_df[['ED', 'AB', 'AV', 'KSF']]
+        pivot_df['TOTAL'] = pivot_df.sum(axis=1)
+        grand_total = pivot_df.sum(axis=0)
+        grand_total.name = 'Grand Total'
+        pivot_df = pd.concat([pivot_df, pd.DataFrame([grand_total])])
+        out_df = pivot_df.reset_index()
+    else:
+        out_df = df
+
+    html_content = out_df.to_html(index=False)
     msg = EmailMessage()
-    msg['Subject'] = "Query Results"
+    msg['Subject'] = "Classification-wise Report"
     msg['From'] = SENDER_EMAIL
     msg['To'] = RECIPIENT_EMAIL
     msg.add_alternative(f"""
-    <html>
-        <body>
-            <p>Hello,</p>
-            <p>Here is the query result you requested:</p>
-            {html_content}
-            <p>Regards,<br>Your App</p>
-        </body>
-    </html>
-    """, subtype='html')
+<html>
+  <body>
+    <p>Hello,</p>
+    <p>Here is your requested query result:</p>
+    {html_content}
+    <p>Regards,<br>Your App</p>
+  </body>
+</html>
+""", subtype='html')
+
     with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
         smtp.login(SENDER_EMAIL, SENDER_PASSWORD)
         smtp.send_message(msg)
 
-st.title("Data Analysis")
+
+st.title("Disbursement")
 
 user_input = st.text_input("Enter your question for the database:")
 
 if user_input and st.button("Send Query Result to Mail"):
-    with st.spinner("Generating SQL and fetching results..."):
-        schema_info = get_full_schema_info()
-        generated_sql = generate_sql_from_prompt(user_input, schema_info)
-        result = query_db(generated_sql)
-        
+    with st.spinner("Generating and fetching results..."):
+        schema = get_full_schema_info()
+        sql = generate_sql_from_prompt(user_input, schema)
+        result = query_db(sql)
+
         if isinstance(result, pd.DataFrame):
-            # Display and send email with pivot if applicable
-            
-            # If classification and nb exist, pivot and do aggregation
-            needed_cols = {'classification', 'nb', 'loan_amount'}
-            if needed_cols.issubset(result.columns):
-                # convert loan_amount to crores
+            if 'loan_amount' in result.columns:
                 result['loan_amount'] = result['loan_amount'].apply(convert_to_crores)
 
-                pivot_df = result.pivot_table(
-                    index='classification',
-                    columns='nb',
-                    values='loan_amount',
-                    aggfunc='sum',
-                    fill_value=0
-                )
-                pivot_df['Total'] = pivot_df.sum(axis=1)
-                grand_totals = pivot_df.sum(axis=0)
-                grand_totals.name = 'Grand total'
-                pivot_df = pivot_df.append(grand_totals)
-                final_df = pivot_df.reset_index()
+            # Show the raw table (no pivot) in Streamlit app
+            st.dataframe(result)
 
-                st.dataframe(final_df)
-                send_email_with_df_html(final_df)
-                st.success("Pivoted loan amount in crores with grand total sent via email.")
-            else:
-                # fallback display and send
-                st.dataframe(result)
-                send_email_with_df_html(result)
-                st.success("Query result sent via email.")
+            # Send pivoted table only in email
+            send_email_with_pivot_and_totals(result)
+
+            st.success("Query result sent by email.")
         else:
             st.error(result)
