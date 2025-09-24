@@ -7,7 +7,7 @@ import os
 import smtplib
 from email.message import EmailMessage
 
-# Load environment variables
+# Load environment variables from .env file
 load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -23,7 +23,6 @@ if not all([DATABASE_URL, GEMINI_API_KEY, SENDER_EMAIL, SENDER_PASSWORD, RECIPIE
 engine = create_engine(DATABASE_URL)
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-
 def get_full_schema_info():
     return """Tables:
 - `borrowers`(`borrower_id` int, `name` varchar(100), `contact` varchar(20), `address` text)
@@ -32,7 +31,6 @@ def get_full_schema_info():
 - `managers`(`manager_id` int, `name` varchar(100), `target` int, `achievement` int, `created_at` datetime)
 - `target`(`spoc_name` text, `Target` double)
 """
-
 
 def clean_sql_query(sql):
     sql = sql.strip()
@@ -43,7 +41,6 @@ def clean_sql_query(sql):
     if sql.lower().startswith("sql"):
         sql = sql[3:].lstrip(" \n")
     return sql
-
 
 def generate_sql_from_prompt(prompt, schema):
     full_prompt = f"""
@@ -58,14 +55,12 @@ ensuring all table and column names are enclosed in backticks (`).
     response = client.models.generate_content(model="gemini-1.5-flash", contents=full_prompt)
     return response.text.strip()
 
-
 def query_db(sql):
     sql = clean_sql_query(sql)
     try:
         return pd.read_sql(text(sql), engine)
     except Exception as e:
         return f"SQL Execution Error: {e}"
-
 
 def convert_to_crores(amount):
     CRORES = 10000000
@@ -76,8 +71,7 @@ def convert_to_crores(amount):
     except:
         return None
 
-
-def send_email_with_pivot_and_totals(df):
+def get_pivot_table(df):
     required_cols = {'classification', 'nb', 'loan_amount'}
     if required_cols.issubset(df.columns):
         pivot_df = pd.pivot_table(
@@ -97,9 +91,12 @@ def send_email_with_pivot_and_totals(df):
         grand_total.name = 'Grand Total'
         pivot_df = pd.concat([pivot_df, pd.DataFrame([grand_total])])
         out_df = pivot_df.reset_index()
+        return out_df
     else:
-        out_df = df
+        return df
 
+def send_email_with_pivot_and_totals(df):
+    out_df = get_pivot_table(df)
     html_content = out_df.to_html(index=False)
     msg = EmailMessage()
     msg['Subject'] = "Classification-wise Report"
@@ -120,8 +117,7 @@ def send_email_with_pivot_and_totals(df):
         smtp.login(SENDER_EMAIL, SENDER_PASSWORD)
         smtp.send_message(msg)
 
-
-st.title("Disbursement")
+st.title("Classification Disbursement")
 
 user_input = st.text_input("Enter your question for the database:")
 
@@ -134,11 +130,10 @@ if user_input and st.button("Send Query Result to Mail"):
         if isinstance(result, pd.DataFrame):
             if 'loan_amount' in result.columns:
                 result['loan_amount'] = result['loan_amount'].apply(convert_to_crores)
+            
+            formatted_df = get_pivot_table(result)
+            st.dataframe(formatted_df)
 
-            # Show the raw table (no pivot) in Streamlit app
-            st.dataframe(result)
-
-            # Send pivoted table only in email
             send_email_with_pivot_and_totals(result)
 
             st.success("Query result sent by email.")
