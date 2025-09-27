@@ -2,9 +2,9 @@
 
 import os
 from sqlalchemy import create_engine
-from langchain.utilities.sql_database import SQLDatabase
+from langchain_community.utilities import SQLDatabase
 from langchain_community.agent_toolkits import SQLDatabaseToolkit
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 from dotenv import load_dotenv
 
@@ -12,11 +12,11 @@ load_dotenv()
 
 
 DATABASE_URL = os.getenv("DATABASE_URL")
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 engine = create_engine(DATABASE_URL)
 db = SQLDatabase(engine)
-llm = ChatGoogleGenerativeAI(google_api_key=GOOGLE_API_KEY, model="gemini-2.5-flash")
+llm = ChatOpenAI(openai_api_key=OPENAI_API_KEY, model="gpt-3.5-turbo")
 toolkit = SQLDatabaseToolkit(db=db, llm=llm)
 tools = toolkit.get_tools()
 
